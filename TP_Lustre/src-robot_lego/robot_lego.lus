@@ -1,0 +1,445 @@
+--------------------------------------------------------------------------------
+-- TP3 Robot Lego Mindstorms EV3
+-- Vos prénoms et noms : Martin Boniol
+-- ENSEEIHT – 2022-2023
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+-- Constant values
+--------------------------------------------------------------------------------
+const STOP : int;
+const FORTH : int;
+const BACK : int;
+const FRONT : int;
+const LEFT : int;
+const RIGHT : int;
+const DARK : int;
+const CONTACT_DISTANCE : int;
+const FORTH_WHEEL_SPEED : int;
+const BACK_WHEEL_SPEED : int;
+const TURN_WHEEL_SPEED : int;
+const ULTRASONIC_FRONT_ANGLE : int;
+const ULTRASONIC_LEFT_ANGLE : int;
+const ULTRASONIC_RIGHT_ANGLE : int;
+
+const BACK_DURATION : int;
+const TURN_DURATION : int;
+const DISTANCE_MEASURE_DURATION : int;
+
+const MAX_FORTH_DURATION : int;
+
+--------------------------------------------------------------------------------
+-- Main node
+--------------------------------------------------------------------------------
+-- Inputs:
+--   sensors 1 to 4 (from ports IN1 to IN4)
+--   speed of motors A to B (from ports OUTA to OUTD)
+-- Assumption:
+--   sensor_1 = right touch sensor
+--   sensor_4 = left touch sensor
+--   sensor_2 = color sensor
+--   sensor_3 = utrasonic sensor
+--   motor_speed_sensor_a = speed of motor A (right wheel)
+--   motor_speed_sensor_b = speed of motor B (left wheel)
+--   motor_speed_sensor_b = speed of motor C (engine to turn the ultrasonic sensor right and left)
+--   no motor on output port D
+--------------------------------------------------------------------------------
+node main_robot (
+		sensor_1 : bool ;
+		sensor_2 : int ;
+		sensor_3 : int ;
+		sensor_4 : bool ;
+		motor_speed_sensor_a : int ;
+		motor_speed_sensor_b : int ;
+		motor_speed_sensor_c : int ;
+		motor_speed_sensor_d : int ;
+		)
+--------------------------------------------------------------------------------
+-- Outputs:
+--   Required rotation direction for each motor (clockwise versus counterclockwise)
+--   Required command mode for each motor (speed versus position)
+--   Required value of the command for each motor
+-- Assumption
+--   Motor_A = right wheel
+--   Motor_B = left wheel
+--   Motor_C = engine to turn the ultrasonic sensor right and left
+--   no motor on output port D
+--------------------------------------------------------------------------------
+returns (
+	Clockwise_A : bool; Counterclockwise_A : bool; Cmd_Position_A : bool ; Cmd_Speed_A : bool; Value_A : int; 
+	Clockwise_B : bool; Counterclockwise_C : bool; Cmd_Position_B : bool ; Cmd_Speed_B : bool; Value_B : int; 
+	Clockwise_C : bool; Counterclockwise_B : bool; Cmd_Position_C : bool ; Cmd_Speed_C : bool; Value_C : int; 
+	Clockwise_D : bool; Counterclockwise_D : bool; Cmd_Position_D : bool ; Cmd_Speed_D : bool; Value_D : int; 
+	);
+--------------------------------------------------------------------------------
+var
+	-- Wheel orders
+	TS_Forth : bool;
+     	TS_Back : bool;
+     	TS_Left : bool;
+     	TS_Right : bool;
+     	TS_Stop : bool;
+
+	US_Forth : bool;
+     	US_Back : bool;
+     	US_Left : bool;
+     	US_Right : bool;
+     	US_Stop : bool;
+
+	Forth : bool;
+     	Back : bool;
+     	Left : bool;
+     	Right : bool;
+     	Stop : bool;
+
+	-- Ultrasonic orders
+	US_Look_Left : bool;
+     	US_Look_Right : bool;
+     	US_Look_Middle : bool;
+     	US_Cmd_Position : bool;
+
+	-- left_touch_contact = true iff the left touch sensor has been touched
+	left_touch_contact : bool;
+
+	-- right_touch_contact = true iff the right touch sensor has been touched
+	right_touch_contact : bool;
+
+	-- ultrasonic_contact = true iff the right ultrasonic sensor has detected an obstacle in front of the robot
+	ultrasonic_contact : bool;
+
+	-- color_contact = true iff the robot is above a black area
+	color_contact : bool ;
+
+	watchdog_contact : bool;
+--------------------------------------------------------------------------------
+let
+	-- contacts
+	color_contact = (sensor_2 < DARK) ->
+		      (if (sensor_2 < DARK) then true
+		      else pre(color_contact));
+
+	watchdog_contact = RISING_EDGE(watchdog(MAX_FORTH_DURATION, true->pre(Stop)));
+
+	-- touch at left iff sensor_1 becomes true
+	-- touch at right iff sensor_4 becomes true
+	left_touch_contact = RISING_EDGE(sensor_1) or watchdog_contact;
+	right_touch_contact = RISING_EDGE(sensor_4);
+
+	-- ultrasonic_contact = true iff an obstacle has been detected in front of the robot and the robot was going forward just before
+	ultrasonic_contact = (sensor_3 < CONTACT_DISTANCE) and pre(Forth);
+
+	-- management of the touch sensor
+	(TS_Forth, TS_Back, TS_Left, TS_Right, TS_Stop) = abstract_robot_with_touch_sensor(
+		  left_touch_contact, right_touch_contact,
+	      	  motor_speed_sensor_a, motor_speed_sensor_b, motor_speed_sensor_c, motor_speed_sensor_d);
+
+	-- management of the ultrasonic sensor
+	(US_Forth, US_Back, US_Left, US_Right, US_Stop,
+	US_Look_Left, US_Look_Right, US_Look_Middle, US_Cmd_Position) = abstract_robot_with_ultrasonic_sensor(
+		  ultrasonic_contact,
+		  sensor_3,
+	      	  motor_speed_sensor_a, motor_speed_sensor_b, motor_speed_sensor_c, motor_speed_sensor_d);
+
+	-- merge between the management of the touch sensors and the ultrasonic sensor
+	Stop = TS_Stop or US_Stop or color_contact;
+	Back = (not Stop) and (TS_Back or US_Back);
+	Left = (not Back) and (not Stop) and (TS_Left or US_Left);
+	Right = (not Back) and (not Stop) and (not Left) and (TS_Right or US_Right);
+	Forth = (not Back) and (not Stop) and (not Left) and (not Right);
+
+	-- translation to the wheel motors
+	Clockwise_A = (Forth or Left);
+	Counterclockwise_A = (Back or Right);
+	Cmd_Position_A = false;
+	Cmd_Speed_A = true;
+	Value_A = if (Forth) then FORTH_WHEEL_SPEED
+		  else if (Back) then BACK_WHEEL_SPEED
+		  else if (Left or Right) then TURN_WHEEL_SPEED
+		  else 0;
+
+	Clockwise_B = (Forth or Right);
+	Counterclockwise_B = (Back or Left);
+	Cmd_Position_B = false;
+	Cmd_Speed_B = true;
+	Value_B = Value_A;
+
+	-- translation of the m_order to the ultrasonic motors
+	Clockwise_C = false;
+	Counterclockwise_C = false;
+	Cmd_Position_C = US_Cmd_Position;
+	Cmd_Speed_C = false;
+	Value_C = if (US_Look_Left) then ULTRASONIC_LEFT_ANGLE
+		  else if (US_Look_Right) then ULTRASONIC_RIGHT_ANGLE
+		  else ULTRASONIC_FRONT_ANGLE;
+
+	-- no motor on output D
+	Clockwise_D = false;
+	Counterclockwise_D = false;
+	Cmd_Position_D = false;
+	Cmd_Speed_D = false;
+	Value_D = 0;
+
+tel;	
+--------------------------------------------------------------------------------
+	
+
+
+--------------------------------------------------------------------------------
+node abstract_robot_with_touch_sensor (
+     touch_right : bool; 
+     touch_left : bool; 
+     speed_of_motor_a : int; 
+     speed_of_motor_b : int; 
+     speed_of_motor_c : int; 
+     speed_of_motor_d : int; ) 
+--------------------------------------------------------------------------------
+returns (
+     Forth : bool;
+     Back : bool;
+     Left : bool;
+     Right : bool;
+     Stop : bool;
+)
+--------------------------------------------------------------------------------
+var
+	side_touched : int ;
+	waiting_after_touch, waiting_after_back, waiting_after_turn : bool;
+	going_back : bool ;
+	turning : bool ;
+--------------------------------------------------------------------------------
+let
+	-- to memorized the side that has been touched
+	side_touched = if (touch_left) then LEFT
+		else if (touch_right) then RIGHT
+		else (0 ->  pre(side_touched));
+	
+	-- To wait wheel motors are stoped
+	waiting_after_touch = switch_RS((speed_of_motor_a=0 and speed_of_motor_b=0), RISING_EDGE (touch_left or touch_right)); 
+	waiting_after_back = switch_RS((speed_of_motor_a=0 and speed_of_motor_b=0), FALLING_EDGE (going_back)); 
+	waiting_after_turn = switch_RS((speed_of_motor_a=0 and speed_of_motor_b=0), FALLING_EDGE (turning)); 
+
+	-- Back timer (BACK_DURATION ticks)
+	going_back = stable(FALLING_EDGE (waiting_after_touch), BACK_DURATION);   
+
+	-- Turn timer (TURN_DURATION ticks)
+	turning = stable(FALLING_EDGE (waiting_after_back), TURN_DURATION);
+
+	-- Management of the wheel motors
+	Stop = waiting_after_touch or waiting_after_back or waiting_after_turn;
+	Back = going_back;
+	Left = side_touched = RIGHT and turning;
+	Right = side_touched = LEFT and turning;
+	Forth = (not Stop) and (not Back) and (not Left) and (not Right);
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node abstract_robot_with_ultrasonic_sensor (
+     contact : bool;
+     distance : int; 
+     speed_of_motor_a : int; 
+     speed_of_motor_b : int; 
+     speed_of_motor_c : int; 
+     speed_of_motor_d : int; 
+) 
+--------------------------------------------------------------------------------
+returns (
+     Forth : bool;
+     Back : bool;
+     Left : bool;
+     Right : bool;
+     Stop : bool;
+
+     Look_Left : bool;
+     Look_Right : bool;
+     Look_Middle : bool;
+     Cmd_Position : bool;
+)
+--------------------------------------------------------------------------------
+var
+	front_distance : int;
+	left_distance : int;
+	right_distance : int;
+
+	wait_after_contact : bool;
+	order_to_left : bool ;
+	order_to_right : bool ;
+	order_to_middle : bool ;
+	wait_after_order_to_left : bool ;
+	wait_after_order_to_right : bool ;
+	wait_after_order_to_middle : bool ;
+	wait_looking_at_left : bool ;
+	wait_looking_at_right : bool ;
+	wait_looking_at_middle : bool ;
+
+	turn_right : bool;
+	turning_right : bool;
+	turn_left : bool;
+	turning_left : bool;
+	forth : bool;
+
+	wait_after_turning_left : bool;
+	wait_after_turning_right : bool;
+--------------------------------------------------------------------------------
+let
+
+	-- To wait wheel motors are stoped
+	wait_after_contact = switch_RS((speed_of_motor_a=0) and (speed_of_motor_b=0), contact); 
+
+	order_to_left = FALLING_EDGE(wait_after_contact) ;
+	wait_after_order_to_left = switch_RS( (speed_of_motor_c=0), order_to_left ); 
+	wait_looking_at_left = stable(FALLING_EDGE(wait_after_order_to_left), DISTANCE_MEASURE_DURATION); 
+
+	order_to_right = FALLING_EDGE(wait_looking_at_left) ;
+	wait_after_order_to_right = switch_RS((speed_of_motor_c=0), RISING_EDGE(order_to_right) );
+	wait_looking_at_right = stable(FALLING_EDGE(wait_after_order_to_right), DISTANCE_MEASURE_DURATION);
+
+	order_to_middle = FALLING_EDGE(wait_looking_at_right) ;
+	wait_after_order_to_middle = switch_RS( (speed_of_motor_c=0), RISING_EDGE(order_to_middle) );
+	wait_looking_at_middle = stable(FALLING_EDGE(wait_after_order_to_middle), DISTANCE_MEASURE_DURATION);
+
+	-- 
+	front_distance = distance -> (if wait_looking_at_middle then distance else pre(front_distance));
+	left_distance = distance -> (if wait_looking_at_left then distance else pre(left_distance));
+	right_distance = distance -> (if wait_looking_at_right then distance else pre(right_distance));
+
+	-- M-motors management
+	Look_Left = order_to_left;
+	Look_Right = order_to_right;
+	Look_Middle = order_to_middle;
+	Cmd_Position = Look_Left or Look_Right or Look_Middle;
+
+	-- Decision after looking at right and left
+	turn_right = FALLING_EDGE(wait_looking_at_middle) and (right_distance > left_distance);
+	turning_right = stable(RISING_EDGE(turn_right), TURN_DURATION);
+	turn_left = FALLING_EDGE(wait_looking_at_middle) and  (left_distance >= right_distance);
+	turning_left = stable(RISING_EDGE(turn_left), TURN_DURATION);
+
+	-- To wait wheel motors are stoped
+	wait_after_turning_left = switch_RS(((speed_of_motor_a=0) and (speed_of_motor_b=0)), FALLING_EDGE (turning_left)); 
+	wait_after_turning_right = switch_RS(((speed_of_motor_a=0) and (speed_of_motor_b=0)), FALLING_EDGE (turning_right)); 
+
+	forth = not (wait_after_contact 
+	      	    or wait_looking_at_left or wait_looking_at_right or wait_looking_at_middle 
+	      	    or wait_after_order_to_left or wait_after_order_to_right or wait_after_order_to_middle 
+		    or turning_right or turning_left
+		    or wait_after_turning_left or wait_after_turning_right);
+
+	-- Wheel motors management
+	Left = turning_left;
+	Right = turning_right;
+	Forth = forth;
+	Back = false;
+	Stop = (not Left) and (not Right) and (not Forth) and (not Back);
+
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node abstract_robot_with_watchdog (
+     contact : bool;
+     speed_of_motor_a : int; 
+     speed_of_motor_b : int; 
+     speed_of_motor_c : int; 
+     speed_of_motor_d : int; 
+) 
+--------------------------------------------------------------------------------
+returns (
+     Forth : bool;
+     Back : bool;
+     Left : bool;
+     Right : bool;
+     Stop : bool;
+)
+--------------------------------------------------------------------------------
+var
+	waiting_after_contact, waiting_after_turn : bool;
+	turning : bool ;
+--------------------------------------------------------------------------------
+let
+	-- To wait wheel motors are stoped
+	waiting_after_contact = switch_RS((speed_of_motor_a=0 and speed_of_motor_b=0), RISING_EDGE (contact)); 
+	waiting_after_turn = switch_RS((speed_of_motor_a=0 and speed_of_motor_b=0), FALLING_EDGE (turning)); 
+
+	-- Turn timer (TURN_DURATION ticks)
+	turning = stable(FALLING_EDGE (waiting_after_contact), TURN_DURATION);
+
+	-- Management of the wheel motors
+	Stop = waiting_after_contact or waiting_after_turn;
+	Back = false ;
+	Left = false ;
+	Right = turning;
+	Forth = (not Stop) and (not Back) and (not Left) and (not Right);
+
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node RISING_EDGE (X : bool) returns (Y : bool) ;
+let
+	Y = X ->(X and not pre(X));
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node FALLING_EDGE (X : bool) returns (Y : bool) ;
+let
+	Y = false ->(not X and pre(X));
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node stable_bool (set : bool; const d : int) returns (level : bool);
+
+var T : bool^d;
+    B : bool^d;
+let
+	T[0] = set;
+	T[1..d-1] = (false^(d-1)-> pre(T[0..d-2]));
+
+	B[0] = T[0];
+	B[1..d-1] = B[0..d-2] or T[1..d-1];
+
+	level = B[d-1];
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node stable (set : bool; d : int) returns (level : bool;)
+var count : int;
+let
+	level = (count>0);
+	count = if set then d
+	      	else if (true->pre(count)=0) then 0
+		else pre(count)-1;
+tel;
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node switch_RS (reset, set : bool) 
+returns (level : bool) ;
+let
+	level = if set then true 
+		else if reset then false
+		else false -> pre(level) ;
+tel.
+--------------------------------------------------------------------------------
+
+
+--------------------------------------------------------------------------------
+node watchdog (delay:int; reset : bool) 
+returns (alarm : bool) ;
+var count : int;
+let
+	count = delay -> if (reset) then delay else if (pre(count)=0) then pre(count) else pre(count)-1;
+	alarm = (count=0) ;
+tel.
+--------------------------------------------------------------------------------
+
